@@ -1,0 +1,67 @@
+"BetterSeed","BetterSeedID","BetterSeedNum","WorseSeed","WorseSeedID","WorseSeedNum","SeriesLength","Predictions"
+"Houston Astros",117,3,"Chicago White Sox",145,6,3,0.513854781142457
+"New York Yankees",147,4,"Boston Red Sox",111,5,3,0.56172855477539
+"Cleveland Guardians",114,2,"Houston Astros",117,3,5,0.542163241031347
+"Cleveland Guardians",114,2,"Chicago White Sox",145,6,5,0.503388384789355
+"Tampa Bay Rays",139,1,"New York Yankees",147,4,5,0.453059517228626
+"Tampa Bay Rays",139,1,"Boston Red Sox",111,5,5,0.474186532659742
+"Tampa Bay Rays",139,1,"Cleveland Guardians",114,2,7,0.527303833481668
+"Tampa Bay Rays",139,1,"Houston Astros",117,3,7,0.563189175271763
+"Tampa Bay Rays",139,1,"Chicago White Sox",145,6,7,0.518130677498116
+"Cleveland Guardians",114,2,"New York Yankees",147,4,7,0.423898706279336
+"Cleveland Guardians",114,2,"Boston Red Sox",111,5,7,0.448318259244227
+"Houston Astros",117,3,"New York Yankees",147,4,7,0.388829581763484
+"Houston Astros",117,3,"Boston Red Sox",111,5,7,0.412769542283292
+"New York Yankees",147,4,"Chicago White Sox",145,6,7,0.585471882010627
+"Boston Red Sox",111,5,"Chicago White Sox",145,6,7,0.561159947067651
+"Atlanta Braves",144,3,"Philadelphia Phillies",143,6,3,0.546757003452046
+"San Diego Padres",35,4,"Chicago Cubs",112,5,3,0.565430152153797
+"Los Angeles Dodgers",119,2,"Atlanta Braves",144,3,5,0.716831086978469
+"Los Angeles Dodgers",119,2,"Philadelphia Phillies",143,6,5,0.718788740276002
+"Milwaukee Brewers",158,1,"San Diego Padres",35,4,5,0.600807527669422
+"Milwaukee Brewers",158,1,"Chicago Cubs",112,5,5,0.625575752087294
+"Milwaukee Brewers",158,1,"Los Angeles Dodgers",119,2,7,0.420443768089878
+"Milwaukee Brewers",158,1,"Atlanta Braves",144,3,7,0.669118824056386
+"Milwaukee Brewers",158,1,"Philadelphia Phillies",143,6,7,0.671585221834794
+"Los Angeles Dodgers",119,2,"San Diego Padres",35,4,7,0.695604628371087
+"Los Angeles Dodgers",119,2,"Chicago Cubs",112,5,7,0.721347503169847
+"Atlanta Braves",144,3,"San Diego Padres",35,4,7,0.449878917087329
+"Atlanta Braves",144,3,"Chicago Cubs",112,5,7,0.479976495423152
+"San Diego Padres",35,4,"Philadelphia Phillies",143,6,7,0.571357435796419
+"Chicago Cubs",112,5,"Philadelphia Phillies",143,6,7,0.541457653251202
+"Milwaukee Brewers",158,1,"Tampa Bay Rays",139,1,7,0.649465258729518
+"Los Angeles Dodgers",119,2,"Tampa Bay Rays",139,1,7,0.727898794936967
+"Tampa Bay Rays",139,1,"Atlanta Braves",144,3,7,0.530852600622029
+"Tampa Bay Rays",139,1,"San Diego Padres",35,4,7,0.471264825802341
+"Tampa Bay Rays",139,1,"Chicago Cubs",112,5,7,0.501468015044356
+"Tampa Bay Rays",139,1,"Philadelphia Phillies",143,6,7,0.533578150771034
+"Milwaukee Brewers",158,1,"New York Yankees",147,4,7,0.584656306264282
+"Los Angeles Dodgers",119,2,"New York Yankees",147,4,7,0.669089625283973
+"Atlanta Braves",144,3,"New York Yankees",147,4,7,0.420412126823875
+"New York Yankees",147,4,"San Diego Padres",35,4,7,0.539212950901663
+"New York Yankees",147,4,"Chicago Cubs",112,5,7,0.569137756699662
+"New York Yankees",147,4,"Philadelphia Phillies",143,6,7,0.600504751671464
+"Milwaukee Brewers",158,1,"Boston Red Sox",111,5,7,0.60863783725211
+"Los Angeles Dodgers",119,2,"Boston Red Sox",111,5,7,0.69112360779922
+"Atlanta Braves",144,3,"Boston Red Sox",111,5,7,0.444793435219714
+"San Diego Padres",35,4,"Boston Red Sox",111,5,7,0.504251704941745
+"Chicago Cubs",112,5,"Boston Red Sox",111,5,7,0.474041634772078
+"Philadelphia Phillies",143,6,"Boston Red Sox",111,5,7,0.442087666677566
+"Milwaukee Brewers",158,1,"Cleveland Guardians",114,2,7,0.665897838058471
+"Los Angeles Dodgers",119,2,"Cleveland Guardians",114,2,7,0.742438491330016
+"Atlanta Braves",144,3,"Cleveland Guardians",114,2,7,0.505825873493956
+"San Diego Padres",35,4,"Cleveland Guardians",114,2,7,0.565161833852744
+"Chicago Cubs",112,5,"Cleveland Guardians",114,2,7,0.535194755934267
+"Philadelphia Phillies",143,6,"Cleveland Guardians",114,2,7,0.503091011182926
+"Milwaukee Brewers",158,1,"Houston Astros",117,3,7,0.697970323082799
+"Los Angeles Dodgers",119,2,"Houston Astros",117,3,7,0.770381377802115
+"Atlanta Braves",144,3,"Houston Astros",117,3,7,0.5418901769856
+"San Diego Padres",35,4,"Houston Astros",117,3,7,0.600463200579051
+"Chicago Cubs",112,5,"Houston Astros",117,3,7,0.570986615958315
+"Philadelphia Phillies",143,6,"Houston Astros",117,3,7,0.539170163035095
+"Milwaukee Brewers",158,1,"Chicago White Sox",145,6,7,0.657521164272289
+"Los Angeles Dodgers",119,2,"Chicago White Sox",145,6,7,0.735045547831802
+"Atlanta Braves",144,3,"Chicago White Sox",145,6,7,0.496636902570546
+"San Diego Padres",35,4,"Chicago White Sox",145,6,7,0.556085893397984
+"Chicago Cubs",112,5,"Chicago White Sox",145,6,7,0.526034546813552
+"Philadelphia Phillies",143,6,"Chicago White Sox",145,6,7,0.493902062185693

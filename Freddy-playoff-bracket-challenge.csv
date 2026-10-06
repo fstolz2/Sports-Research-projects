@@ -1,0 +1,67 @@
+BetterSeed,BetterSeedID,BetterSeedNum,WorseSeed,WorseSeedID,WorseSeedNum,SeriesLength,Predictions
+Houston Astros,117,3,Chicago White Sox,145,6,3,0.513854781
+New York Yankees,147,4,Boston Red Sox,111,5,3,0.561728555
+Cleveland Guardians,114,2,Houston Astros,117,3,5,0.542163241
+Cleveland Guardians,114,2,Chicago White Sox,145,6,5,0.503388385
+Tampa Bay Rays,139,1,New York Yankees,147,4,5,0.453059517
+Tampa Bay Rays,139,1,Boston Red Sox,111,5,5,0.474186533
+Tampa Bay Rays,139,1,Cleveland Guardians,114,2,7,0.527303833
+Tampa Bay Rays,139,1,Houston Astros,117,3,7,0.563189175
+Tampa Bay Rays,139,1,Chicago White Sox,145,6,7,0.518130677
+Cleveland Guardians,114,2,New York Yankees,147,4,7,0.423898706
+Cleveland Guardians,114,2,Boston Red Sox,111,5,7,0.448318259
+Houston Astros,117,3,New York Yankees,147,4,7,0.388829582
+Houston Astros,117,3,Boston Red Sox,111,5,7,0.412769542
+New York Yankees,147,4,Chicago White Sox,145,6,7,0.585471882
+Boston Red Sox,111,5,Chicago White Sox,145,6,7,0.561159947
+Atlanta Braves,144,3,Philadelphia Phillies,143,6,3,0.546757003
+San Diego Padres,35,4,Chicago Cubs,112,5,3,0.565430152
+Los Angeles Dodgers,119,2,Atlanta Braves,144,3,5,0.716831087
+Los Angeles Dodgers,119,2,Philadelphia Phillies,143,6,5,0.71878874
+Milwaukee Brewers,158,1,San Diego Padres,35,4,5,0.600807528
+Milwaukee Brewers,158,1,Chicago Cubs,112,5,5,0.625575752
+Milwaukee Brewers,158,1,Los Angeles Dodgers,119,2,7,0.420443768
+Milwaukee Brewers,158,1,Atlanta Braves,144,3,7,0.669118824
+Milwaukee Brewers,158,1,Philadelphia Phillies,143,6,7,0.671585222
+Los Angeles Dodgers,119,2,San Diego Padres,35,4,7,0.695604628
+Los Angeles Dodgers,119,2,Chicago Cubs,112,5,7,0.721347503
+Atlanta Braves,144,3,San Diego Padres,35,4,7,0.449878917
+Atlanta Braves,144,3,Chicago Cubs,112,5,7,0.479976495
+San Diego Padres,35,4,Philadelphia Phillies,143,6,7,0.571357436
+Chicago Cubs,112,5,Philadelphia Phillies,143,6,7,0.541457653
+Milwaukee Brewers,158,1,Tampa Bay Rays,139,1,7,0.649465259
+Los Angeles Dodgers,119,2,Tampa Bay Rays,139,1,7,0.727898795
+Tampa Bay Rays,139,1,Atlanta Braves,144,3,7,0.530852601
+Tampa Bay Rays,139,1,San Diego Padres,35,4,7,0.471264826
+Tampa Bay Rays,139,1,Chicago Cubs,112,5,7,0.501468015
+Tampa Bay Rays,139,1,Philadelphia Phillies,143,6,7,0.533578151
+Milwaukee Brewers,158,1,New York Yankees,147,4,7,0.584656306
+Los Angeles Dodgers,119,2,New York Yankees,147,4,7,0.669089625
+Atlanta Braves,144,3,New York Yankees,147,4,7,0.420412127
+New York Yankees,147,4,San Diego Padres,35,4,7,0.539212951
+New York Yankees,147,4,Chicago Cubs,112,5,7,0.569137757
+New York Yankees,147,4,Philadelphia Phillies,143,6,7,0.600504752
+Milwaukee Brewers,158,1,Boston Red Sox,111,5,7,0.608637837
+Los Angeles Dodgers,119,2,Boston Red Sox,111,5,7,0.691123608
+Atlanta Braves,144,3,Boston Red Sox,111,5,7,0.444793435
+San Diego Padres,35,4,Boston Red Sox,111,5,7,0.504251705
+Chicago Cubs,112,5,Boston Red Sox,111,5,7,0.474041635
+Philadelphia Phillies,143,6,Boston Red Sox,111,5,7,0.442087667
+Milwaukee Brewers,158,1,Cleveland Guardians,114,2,7,0.665897838
+Los Angeles Dodgers,119,2,Cleveland Guardians,114,2,7,0.742438491
+Atlanta Braves,144,3,Cleveland Guardians,114,2,7,0.505825873
+San Diego Padres,35,4,Cleveland Guardians,114,2,7,0.565161834
+Chicago Cubs,112,5,Cleveland Guardians,114,2,7,0.535194756
+Philadelphia Phillies,143,6,Cleveland Guardians,114,2,7,0.503091011
+Milwaukee Brewers,158,1,Houston Astros,117,3,7,0.697970323
+Los Angeles Dodgers,119,2,Houston Astros,117,3,7,0.770381378
+Atlanta Braves,144,3,Houston Astros,117,3,7,0.541890177
+San Diego Padres,35,4,Houston Astros,117,3,7,0.600463201
+Chicago Cubs,112,5,Houston Astros,117,3,7,0.570986616
+Philadelphia Phillies,143,6,Houston Astros,117,3,7,0.539170163
+Milwaukee Brewers,158,1,Chicago White Sox,145,6,7,0.657521164
+Los Angeles Dodgers,119,2,Chicago White Sox,145,6,7,0.735045548
+Atlanta Braves,144,3,Chicago White Sox,145,6,7,0.496636903
+San Diego Padres,35,4,Chicago White Sox,145,6,7,0.556085893
+Chicago Cubs,112,5,Chicago White Sox,145,6,7,0.526034547
+Philadelphia Phillies,143,6,Chicago White Sox,145,6,7,0.493902062

@@ -1,0 +1,1081 @@
+---
+title: "Baseball Challenge prediction"
+author: "Freddy"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "C:/Users/flsto/OneDrive/Desktop/STATS/Projects/Baseball Predictor")
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(baseballr)
+library(Lahman)
+library(tidyr)
+library(purrr)
+library(stringr)
+library(lubridate)
+library(BradleyTerry2)
+library(stats)
+library(ggplot2)
+library(knitr)
+```
+
+
+```{r}
+# ============================================================
+# starter_score.R
+# Scores a team's starting pitchers for playoff series prediction.
+#
+# xFIP              60%  - overall quality (HR/K/BB), primary metric
+# Stamina           10%  - pitches per start
+# TTO3 wOBA-against 15%  - proxy for degradation 3rd time through
+#                          (xFIP itself isn't split by TTO -- this
+#                          comes from a manually-maintained CSV since
+#                          FanGraphs' TTO splits live in a separate
+#                          tool baseballr doesn't wrap. Shrunk toward
+#                          league average based on batters faced.)
+# IFFB%              5%  - infield fly ball rate: weak/mistimed contact
+# Non-pulled batted%  5%  - Cent_pct + Oppo_pct, proxy for "not pulled"
+#                          (FanGraphs doesn't split FB-specific pull rate,
+#                          so this uses all-batted-ball direction as the
+#                          nearest available proxy)
+# Soft contact %      5%  - Soft_pct from FanGraphs batted-ball profile
+#
+# IFFB%, non-pulled%, and Soft% are all shrunk toward the league
+# average based on TBF (total batters faced), so pitchers with thin
+# samples (injuries, midseason call-ups, low-volume guys like a
+# Blake Snell type) don't get over/under-rated by noise.
+#
+# NOTE: fg_pitcher_leaders() returns ALL stat categories in one call
+# in current baseballr versions -- xFIP, IFFB_pct, Cent_pct, Oppo_pct,
+# Soft_pct, and TBF all come back together, so there's no need for a
+# separate "batted ball" call.
+#
+# Requires: baseballr, dplyr
+# ============================================================
+
+library(baseballr)
+library(dplyr)
+
+# ---- Config: tune these weights as we go -------------------
+STARTER_WEIGHTS <- list(
+  xfip          = 0.60,  # primary: overall quality
+  stamina       = 0.10,  # pitches per start
+  tto3_penalty  = 0.15,  # wOBA-against 3rd time through, inverted
+  iffb          = 0.05,  # infield fly ball rate
+  non_pulled    = 0.05,  # Cent_pct + Oppo_pct, proxy for non-pulled contact
+  soft_contact  = 0.05   # Soft_pct from batted-ball profile
+)
+
+# ------------------------------------------------------------
+# 1. Season xFIP, stamina, and batted-ball profile -- all in
+#    one fg_pitcher_leaders() call for all qualified starters.
+#    IFFB%, non-pulled%, and Soft% are shrunk toward league
+#    average based on TBF (sample size) before being returned.
+# ------------------------------------------------------------
+get_pitcher_base_stats <- function(season, teams = NULL,
+                                    name_lookup_path = "team_name_lookup.csv",
+                                    k_batted_ball = 150) {
+  fg <- fg_pitcher_leaders(
+    startseason = season,
+    endseason   = season,
+    qual        = "0",
+    stats       = "sta", # starters (was `pitcher_type` in older baseballr versions)
+    ind         = 1      # split traded pitchers by team-stint instead of aggregating
+  )
+
+  # League-wide averages computed BEFORE filtering to specific teams,
+  # so the shrinkage baseline reflects the full league, not a small
+  # biased subset. Confirm `TBF` is the exact column name in your
+  # baseballr version with names(fg) -- it may be spelled differently.
+  league_avg_iffb       <- mean(fg$IFFB_pct, na.rm = TRUE)
+  league_avg_soft       <- mean(fg$Soft_pct, na.rm = TRUE)
+  league_avg_non_pulled <- mean(fg$Cent_pct + fg$Oppo_pct, na.rm = TRUE)
+
+  result <- fg %>%
+    transmute(
+      player_name    = PlayerName,
+      team           = team_name,
+      xFIP           = xFIP,
+      pitches        = Pitches,
+      GS             = GS,
+      G              = G,
+      TBF            = TBF,  # <-- confirm this column name with names(fg)
+      pitches_per_start  = Pitches / GS,
+      iffb_pct_raw       = IFFB_pct,
+      non_pulled_pct_raw = Cent_pct + Oppo_pct,
+      soft_pct_raw       = Soft_pct
+    ) %>%
+    # Safety net: regardless of whether the server-side `stats = "sta"`
+    # filter behaved as expected, only keep pitchers who were actually
+    # used as starters this season (most of their appearances were starts).
+    filter(GS > 0, GS / G >= 0.5) %>%
+    # FanGraphs sometimes returns a dash placeholder like "- - -" instead
+    # of a real blank/NA when a player's team is ambiguous under the
+    # ind=1 split. Convert that to a real NA so the lookup-patch below
+    # actually catches it. (Detects "no letters/digits" rather than
+    # matching specific dash characters, since those can vary.)
+    mutate(team = ifelse(grepl("[A-Za-z0-9]", team), team, NA)) %>%
+    # Shrink thin-sample batted-ball rates toward league average,
+    # weighted by TBF -- keeps low-volume pitchers (injuries, limited
+    # innings) from swinging the composite score off noise.
+    mutate(
+      iffb_pct       = (TBF * iffb_pct_raw + k_batted_ball * league_avg_iffb) / (TBF + k_batted_ball),
+      non_pulled_pct = (TBF * non_pulled_pct_raw + k_batted_ball * league_avg_non_pulled) / (TBF + k_batted_ball),
+      soft_pct       = (TBF * soft_pct_raw + k_batted_ball * league_avg_soft) / (TBF + k_batted_ball)
+    )
+
+  # Patch in missing team labels for traded pitchers -- their stats from
+  # the ind=1 split are already correct, only the team name came back blank.
+  # See team_name_lookup.csv (columns: player_name, team).
+  if (file.exists(name_lookup_path)) {
+    lookup <- read.csv(name_lookup_path, stringsAsFactors = FALSE) %>%
+      mutate(player_name = trimws(player_name))
+    result <- result %>%
+      mutate(player_name = trimws(player_name)) %>%
+      left_join(lookup, by = "player_name", suffix = c("", "_lookup")) %>%
+      mutate(team = ifelse(is.na(team), team_lookup, team)) %>%
+      select(-team_lookup)
+  }
+
+  if (!is.null(teams)) {
+    result <- result %>% filter(team %in% teams)
+  }
+
+  result
+}
+
+# ------------------------------------------------------------
+# 2. wOBA-against by times-through-the-order (3rd time)
+#    FanGraphs' TTO splits live behind their separate Splits Tool,
+#    which baseballr doesn't currently wrap. Instead, this reads a
+#    small manually-maintained CSV -- only the playoff teams' top
+#    3-4 starters ever need this, so it's a short list to keep
+#    updated each postseason. See tto3_lookup.csv for the expected
+#    format (player_name, team, woba_tto3, bf_tto3).
+#
+#    The raw wOBA is shrunk toward a league-average baseline,
+#    weighted by bf_tto3 (batters faced 3rd time through), so
+#    low-volume pitchers (e.g. a Blake Snell type who doesn't
+#    rack up innings) don't get an unreliable score from a thin
+#    sample -- good or bad.
+# ------------------------------------------------------------
+get_tto3_woba <- function(lookup_path = "tto3_lookup.csv", k = 60, league_avg_woba = 0.335) {
+  raw <- read.csv(lookup_path, stringsAsFactors = FALSE)
+
+  raw %>%
+    mutate(
+      woba_tto3 = (bf_tto3 * woba_tto3 + k * league_avg_woba) / (bf_tto3 + k)
+    )
+}
+
+# ------------------------------------------------------------
+# 3. Normalize a stat to a 0-1 scale within the season's pool
+#    (lower-is-better stats get inverted so 1 = best)
+# ------------------------------------------------------------
+normalize <- function(x, lower_is_better = FALSE) {  # all calls here pass it explicitly
+  r <- range(x, na.rm = TRUE)
+  scaled <- (x - r[1]) / (r[2] - r[1])
+  if (lower_is_better) 1 - scaled else scaled
+}
+
+# ------------------------------------------------------------
+# 4. Build a single composite score per pitcher
+# ------------------------------------------------------------
+build_starter_scores <- function(season, teams = NULL, tto3_path = "tto3_lookup.csv") {
+  base <- get_pitcher_base_stats(season, teams = teams)
+  tto3 <- get_tto3_woba(tto3_path)
+
+  combined <- base %>%
+    left_join(tto3, by = c("player_name", "team")) %>%
+    mutate(
+      xfip_score       = normalize(xFIP, lower_is_better = TRUE),
+      stamina_score    = normalize(pitches_per_start, lower_is_better = FALSE),
+      tto3_score       = normalize(woba_tto3, lower_is_better = TRUE),
+      iffb_score       = normalize(iffb_pct, lower_is_better = FALSE),   # more IFFB% = better
+      non_pulled_score = normalize(non_pulled_pct, lower_is_better = FALSE),
+      soft_score       = normalize(soft_pct, lower_is_better = FALSE),  # more soft contact = better
+      composite = STARTER_WEIGHTS$xfip * xfip_score +
+                  STARTER_WEIGHTS$stamina * stamina_score +
+                  STARTER_WEIGHTS$tto3_penalty * tto3_score +
+                  STARTER_WEIGHTS$iffb * iffb_score +
+                  STARTER_WEIGHTS$non_pulled * non_pulled_score +
+                  STARTER_WEIGHTS$soft_contact * soft_score
+    )
+
+  combined
+}
+
+# ------------------------------------------------------------
+# 5. Get a team's top-N starters by composite score, in order
+#    (used differently per round: WC uses top 3, DS/CS/WS use top 4).
+#
+#    By default this just ranks by composite. To force the result
+#    to only the pitchers you actually expect in the rotation
+#    (e.g. excluding a small-sample call-up who scores artificially
+#    high), either:
+#      - pass only_players = c("Name1", "Name2", ...) for a quick
+#        one-off override, or
+#      - maintain a confirmed_rotation.csv (columns: team, player_name)
+#        listing your intended starters per team; if present, it's
+#        used automatically for any team it covers.
+#    Either way, the players who make the cut are still ranked by
+#    composite among themselves, so the ordering (Game 1 starter vs.
+#    Game 4 starter) stays data-driven.
+# ------------------------------------------------------------
+get_team_rotation <- function(scores_df, team_abbr, n = 4,
+                               only_players = NULL,
+                               confirmed_path = "confirmed_rotation.csv") {
+  df <- scores_df %>% filter(team == team_abbr)
+
+  if (!is.null(only_players)) {
+    df <- df %>% filter(player_name %in% only_players)
+  } else if (file.exists(confirmed_path)) {
+    confirmed <- read.csv(confirmed_path, stringsAsFactors = FALSE) %>%
+      filter(team == team_abbr) %>%
+      pull(player_name)
+    if (length(confirmed) > 0) {
+      df <- df %>% filter(player_name %in% confirmed)
+    }
+  }
+
+  df %>%
+    arrange(desc(composite)) %>%
+    slice_head(n = n)
+}
+
+# ------------------------------------------------------------
+# Example usage:
+# scores <- build_starter_scores(2026, teams = c("PHI", "LAD", "MIL", "NYM"))
+# get_team_rotation(scores, "PHI", n = 4)
+# get_team_rotation(scores, "PHI", n = 4, only_players = c("Zack Wheeler", "Cristopher Sánchez"))
+# ------------------------------------------------------------
+playoff_teams = c("CHW", "CLE", "NYY", "TBR", "BOS", "HOU", "ATL", "PHI", "CHC", "MIL", "LAD", "SDP")
+rotation_pitchers = c("Sonny Gray", "Payton Tolle", "Ranger Suarez", "Jake Bennett", "Sean Burke", "Davis Martin", "Anthony Kay", "Erick Fedde", "Gavin Williams", "Parker Messick", "Tanner Bibee", "Joey Cantillo", "Hunter Brown", "Peter Lambert", "Cristian Javier", "Hayden Wesneski", "Cam Schlittler", "Max Fried", "Carlos Rodón", "Gerrit Cole", "Drew Rasmussen", "Freddy Peralta", "Nick Martinez", "Ian Seymour", "Chris Sale", "Tyler Mahle", "Grant Holmes", "Bryce Elder", "Kevin Gausman", "David Peterson", "Matthew Boyd", "Shota Imanaga", "Yoshinobu Yamamoto", "Tarik Skubal", "Tyler Glasnow", "Blake Snell", "Jacob Misiorowski", "Logan Henderson", "Dustin May", "Kyle Harrison", "Cristopher Sánchez", "Zack Wheeler", "Jesús Luzardo", "Aaron Nola", "Michael King", "Casey Mize", "Nick Pivetta", "Robbie Ray")
+```
+
+```{r}
+pitching_scores = build_starter_scores("2026", playoff_teams)
+pitching_scores
+```
+
+```{r}
+ATL_rotation = get_team_rotation(scores, "ATL", only_players = rotation_pitchers)
+BOS_rotation = get_team_rotation(scores, "BOS", only_players = rotation_pitchers)
+CHC_rotation = get_team_rotation(scores, "CHC", only_players = rotation_pitchers)
+CHW_rotation = get_team_rotation(scores, "CHW", only_players = rotation_pitchers)
+CLE_rotation = get_team_rotation(scores, "CLE", only_players = rotation_pitchers)
+HOU_rotation = get_team_rotation(scores, "HOU", only_players = rotation_pitchers)
+LAD_rotation = get_team_rotation(scores, "LAD", only_players = rotation_pitchers)
+MIL_rotation = get_team_rotation(scores, "MIL", only_players = rotation_pitchers)
+NYY_rotation = get_team_rotation(scores, "NYY", only_players = rotation_pitchers)
+PHI_rotation = get_team_rotation(scores, "PHI", only_players = rotation_pitchers)
+SDP_rotation = get_team_rotation(scores, "SDP", only_players = rotation_pitchers)
+TBR_rotation = get_team_rotation(scores, "TBR", only_players = rotation_pitchers)
+TBR_rotation
+```
+
+```{r}
+# ============================================================
+# team_defense_score.R
+# Team defense score: 50% DRS (FanGraphs/SIS) + 50% FRV (Statcast).
+# No separate arm bucket -- already inside both metrics.
+#
+# Inputs: team_frv_lookup.csv (col: name, total_runs)
+#         team_drs_lookup.csv (col: Team, DRS)
+# Both use team abbreviations directly.
+# ============================================================
+
+library(dplyr)
+
+get_team_frv <- function(path = "team_frv_lookup.csv") {
+  read.csv(path, stringsAsFactors = FALSE) %>%
+    transmute(team = toupper(trimws(name)), team_frv = total_runs)
+}
+
+get_team_drs <- function(path = "team_drs_lookup.csv") {
+  read.csv(path, stringsAsFactors = FALSE) %>%
+    transmute(team = toupper(trimws(Team)), team_drs = DRS)
+}
+
+normalize <- function(x, lower_is_better = FALSE) {
+  r <- range(x, na.rm = TRUE)
+  s <- (x - r[1]) / (r[2] - r[1])
+  if (lower_is_better) 1 - s else s
+}
+
+build_team_defense_scores <- function(teams = NULL,
+                                       frv_path = "team_frv_lookup.csv",
+                                       drs_path = "team_drs_lookup.csv") {
+  frv <- get_team_frv(frv_path)
+  drs <- get_team_drs(drs_path)
+
+  combined <- frv %>%
+    full_join(drs, by = "team") %>%
+    mutate(
+      frv_score = normalize(team_frv),
+      drs_score = normalize(team_drs),
+      composite = 0.5 * frv_score + 0.5 * drs_score
+    )
+
+  if (!is.null(teams)) combined <- combined %>% filter(team %in% teams)
+  combined %>% arrange(desc(composite))
+}
+
+# defense <- build_team_defense_scores(teams = c("PHI","LAD","MIL", ...))
+
+```
+
+```{r}
+defense_scores = build_team_defense_scores(playoff_teams)
+defense_scores
+```
+
+
+
+
+
+```{r}
+# ============================================================
+# lineup_score.R
+# Scores a team's expected lineup for playoff series prediction.
+#
+# wRC+          40%  - season, park/league-adjusted overall production
+# xwOBA         40%  - season, Statcast contact-quality (luck-stripped)
+# 2nd-half      15%  - blend of 2nd-half wRC+ and 2nd-half xwOBA (7.5/7.5)
+# Baserunning    5%  - Statcast baserunning run value
+#
+# Only players listed in expected_lineup.csv (team, player_name) are
+# scored -- this is how injuries/bench decisions get handled, same
+# pattern as confirmed_rotation.csv for starters.
+#
+# wRC+ is pulled programmatically via fg_batter_leaders() (like xFIP
+# was for starters). xwOBA and baserunning are read from manually
+# exported Baseball Savant CSVs -- same reasoning as team defense:
+# baseballr's Statcast wrapper functions proved unreliable to guess,
+# so CSV export is the more robust path for Statcast-flavored stats.
+#
+# Requires: baseballr, dplyr
+# ============================================================
+
+library(baseballr)
+library(dplyr)
+
+LINEUP_WEIGHTS <- list(
+  wrc_plus     = 0.40,
+  xwoba        = 0.40,
+  second_half  = 0.15,  # split 7.5/7.5 between 2H wRC+ and 2H xwOBA
+  baserunning  = 0.05
+)
+
+# ------------------------------------------------------------
+# Name normalization -- same defensive pattern as starter_score.R
+# (handles case differences and encoding issues like Rodon/deGrom).
+# ------------------------------------------------------------
+normalize_name <- function(x) {
+  x <- iconv(x, to = "UTF-8", sub = "byte")
+  x <- tolower(trimws(x))
+  # Manual diacritic strip instead of iconv(..., to = "ASCII//TRANSLIT"):
+  # that TRANSLIT step is unreliable on Windows (drops/mangles accented
+  # characters instead of cleanly stripping them), which is almost
+  # certainly why accented names weren't matching plain-ASCII ones in
+  # expected_lineup.csv. chartr() is deterministic on any OS.
+  from <- "áàäâãåéèëêíìïîóòöôõøúùüûñçýÿ"
+  to   <- "aaaaaaeeeeiiiioooooouuuuncyy"
+  chartr(from, to, x)
+}
+
+normalize <- function(x, lower_is_better = FALSE) {
+  r <- range(x, na.rm = TRUE)
+  s <- (x - r[1]) / (r[2] - r[1])
+  if (lower_is_better) 1 - s else s
+}
+
+# Different sources abbreviate the same team differently (Savant's
+# baserunning leaderboard uses TB/SD, FanGraphs uses TBR/SDP, etc.).
+# Canonicalize to the FanGraphs-style codes -- whatever you used in
+# expected_lineup.csv -- so team-based joins don't silently miss.
+TEAM_ALIASES <- c(
+  "TB" = "TBR", "SD" = "SDP", "CWS" = "CHW", "WSH" = "WSN",
+  "KC" = "KCR", "SF" = "SFG", "AZ" = "ARI"
+)
+normalize_team <- function(x) {
+  x <- toupper(trimws(x))
+  ifelse(x %in% names(TEAM_ALIASES), TEAM_ALIASES[x], x)
+}
+
+# Savant exports name players as "Last, First" in a column literally
+# called `last_name, first_name`. Flip it to "First Last" so it lines
+# up with normalize_name() applied to FanGraphs' PlayerName elsewhere.
+savant_name_to_join <- function(x) {
+  flipped <- sub("^(.*), (.*)$", "\\2 \\1", x)
+  normalize_name(flipped)
+}
+
+# Savant CSVs can carry blank/duplicate header cells (from merged export
+# headers) that read.csv(check.names = FALSE) preserves as literal NA/""
+# column names -- those break dplyr verbs. Drop them before use.
+drop_unnamed_cols <- function(df) {
+  df[, !is.na(names(df)) & names(df) != "", drop = FALSE]
+}
+
+# ------------------------------------------------------------
+# 1. Expected lineup -- the master list of who actually gets scored
+# ------------------------------------------------------------
+get_expected_lineup <- function(path = "expected_lineup.csv") {
+  read.csv(path, stringsAsFactors = FALSE) %>%
+    mutate(join_name = normalize_name(player_name),
+           team = normalize_team(team))
+}
+
+# Same dash-placeholder patch as starter_score.R: a traded player's row
+# sometimes comes back with team = "- - -" (ind=1 stint split) or
+# "2 Tms" (combined, non-split) instead of a real abbreviation. Convert
+# either to real NA, then patch from team_name_lookup.csv (columns:
+# player_name, team) -- same file the pitcher module uses.
+patch_traded_team <- function(df, name_lookup_path = "team_name_lookup.csv") {
+  df <- df %>%
+    mutate(team = ifelse(!grepl("[A-Za-z0-9]", team) | grepl("Tms", team, ignore.case = TRUE),
+                          NA, team))
+
+  if (file.exists(name_lookup_path)) {
+    lookup <- read.csv(name_lookup_path, stringsAsFactors = FALSE) %>%
+      mutate(join_name = normalize_name(player_name)) %>%
+      select(join_name, team_lookup = team)
+    df <- df %>%
+      left_join(lookup, by = "join_name") %>%
+      mutate(team = ifelse(is.na(team), team_lookup, team)) %>%
+      select(-team_lookup)
+  }
+  df
+}
+
+# ------------------------------------------------------------
+# 2. Season wRC+ via FanGraphs
+#    ind = 0 (default, no team split) -- for a traded player, this
+#    gives one combined full-season row instead of two partial ones,
+#    since we want their whole season, not just the current-team slice
+#    (2nd-half numbers below still capture the recent-team picture).
+# ------------------------------------------------------------
+#    Shrunk toward league average, weighted by PA, k = 150 -- same
+#    reasoning as xwOBA's shrinkage.
+get_batter_wrc <- function(season, k = 150) {
+  fg <- fg_batter_leaders(
+    startseason = season,
+    endseason   = season,
+    qual        = "0",
+    stats       = "bat"
+  )
+
+  league_avg_wrc <- mean(fg$wRC_plus, na.rm = TRUE)
+
+  fg %>%
+    transmute(
+      join_name    = normalize_name(PlayerName),
+      team         = normalize_team(team_name),
+      wrc_plus_raw = wRC_plus,
+      pa           = PA,
+      wrc_plus     = (pa * wrc_plus_raw + k * league_avg_wrc) / (pa + k)
+    ) %>%
+    select(join_name, team, wrc_plus) %>%
+    patch_traded_team()
+}
+
+# ------------------------------------------------------------
+# 3. 2nd-half wRC+ via FanGraphs date range
+#    Adjust start_date each season -- rough All-Star-break proxy.
+# ------------------------------------------------------------
+get_batter_wrc_2h <- function(season, start_date, end_date) {
+  fg <- fg_batter_leaders(
+    startseason = season,
+    endseason   = season,
+    qual        = "0",
+    stats       = "bat",
+    month       = "1000",  # sentinel: tells FanGraphs to honor startdate/enddate
+    startdate   = start_date,
+    enddate     = end_date,
+    ind         = 1
+  )
+
+  fg %>%
+    transmute(
+      join_name    = normalize_name(PlayerName),
+      team         = normalize_team(team_name),
+      wrc_plus_2h  = wRC_plus
+    ) %>%
+    patch_traded_team()
+}
+
+# ------------------------------------------------------------
+# 4. Season xwOBA -- Baseball Savant CSV export
+#    Shrunk toward league average, weighted by PA, k = 150 (roughly
+#    where xwOBA stabilizes) so low-PA guys don't get extreme scores
+#    off a thin sample.
+# ------------------------------------------------------------
+get_batter_xwoba <- function(path = "team_xwoba_lookup.csv", k = 150, league_avg_xwoba = NULL) {
+  raw <- read.csv(path, stringsAsFactors = FALSE, check.names = FALSE) %>%
+    drop_unnamed_cols()
+
+  if (is.null(league_avg_xwoba)) {
+    league_avg_xwoba <- mean(raw$est_woba, na.rm = TRUE)
+  }
+
+  raw %>%
+    transmute(
+      join_name  = savant_name_to_join(`last_name, first_name`),
+      xwoba_raw  = est_woba,
+      pa         = pa,
+      xwoba      = (pa * xwoba_raw + k * league_avg_xwoba) / (pa + k)
+    ) %>%
+    select(join_name, xwoba)
+}
+
+# ------------------------------------------------------------
+# 5. 2nd-half xwOBA -- Savant export filtered to 2nd half before export
+#    No shrinkage here -- no strong stabilization-point argument for
+#    a half-season split the way there is for full-season xwOBA/wRC+.
+# ------------------------------------------------------------
+get_batter_xwoba_2h <- function(path = "team_xwoba_2h_lookup.csv") {
+  # This export uses a different layout than the season file: plain
+  # "player_name" (already First Last) and "xwOBA" (capitalized).
+  read.csv(path, stringsAsFactors = FALSE, check.names = FALSE) %>%
+    drop_unnamed_cols() %>%
+    transmute(
+      join_name = normalize_name(player_name),
+      team      = normalize_team(team),
+      xwoba_2h  = xwOBA
+    ) %>%
+    patch_traded_team()
+}
+
+# ------------------------------------------------------------
+# 6. Baserunning run value -- Savant export
+#    <-- CONFIRM stat column name (name column assumed same "Last, First" format)
+# ------------------------------------------------------------
+get_baserunning <- function(path = "team_baserunning_lookup.csv") {
+  read.csv(path, stringsAsFactors = FALSE, check.names = FALSE) %>%
+    drop_unnamed_cols() %>%
+    transmute(
+      # This export uses `entity_name`, not `last_name, first_name` --
+      # check its format (Last, First vs First Last) and swap
+      # savant_name_to_join() for normalize_name() below if it's
+      # already "First Last".
+      join_name = savant_name_to_join(entity_name),
+      team      = normalize_team(team_name),
+      baserunning_runs = runner_runs_tot
+    )
+}
+
+# ------------------------------------------------------------
+# 7. Build composite lineup scores
+# ------------------------------------------------------------
+build_lineup_scores <- function(season, start_date_2h, end_date_2h,
+                                 lineup_path = "expected_lineup.csv",
+                                 xwoba_path = "team_xwoba_lookup.csv",
+                                 xwoba_2h_path = "team_xwoba_2h_lookup.csv",
+                                 baserunning_path = "team_baserunning_lookup.csv") {
+
+  lineup    <- get_expected_lineup(lineup_path)
+  wrc       <- get_batter_wrc(season)
+  wrc_2h    <- get_batter_wrc_2h(season, start_date_2h, end_date_2h)
+  xwoba     <- get_batter_xwoba(xwoba_path)
+  xwoba_2h  <- get_batter_xwoba_2h(xwoba_2h_path)
+  baserun   <- get_baserunning(baserunning_path)
+
+  # Join on team + join_name, not join_name alone -- there are real
+  # same-name collisions in MLB (two different Max Muncys), and joining
+  # on name only lets one lineup row match multiple FanGraphs rows,
+  # duplicating it and scrambling which stats land on which player.
+  combined <- lineup %>%
+    left_join(wrc,      by = c("join_name", "team")) %>%
+    left_join(wrc_2h,   by = c("join_name", "team")) %>%
+    left_join(xwoba,     by = "join_name") %>%  # season xwOBA export has no team col
+    left_join(xwoba_2h,  by = c("join_name", "team")) %>%
+    left_join(baserun,   by = c("join_name", "team")) %>%
+    mutate(
+      wrc_score      = normalize(wrc_plus),
+      xwoba_score    = normalize(xwoba),
+      wrc_2h_score   = normalize(wrc_plus_2h),
+      xwoba_2h_score = normalize(xwoba_2h),
+      second_half_score = (wrc_2h_score + xwoba_2h_score) / 2,
+      baserunning_score = normalize(baserunning_runs),
+
+      # Guys with no 2nd-half PAs (e.g. injured all 2nd half) get NA here,
+      # which would otherwise NA out the whole composite. Instead: drop
+      # the 2nd-half term and rescale the remaining weights up so they
+      # still sum to 1 -- their score is then based purely on the other
+      # components, not artificially docked for missing data.
+      composite = ifelse(
+        is.na(second_half_score),
+        (LINEUP_WEIGHTS$wrc_plus * wrc_score +
+           LINEUP_WEIGHTS$xwoba * xwoba_score +
+           LINEUP_WEIGHTS$baserunning * baserunning_score) /
+          (1 - LINEUP_WEIGHTS$second_half),
+        LINEUP_WEIGHTS$wrc_plus * wrc_score +
+          LINEUP_WEIGHTS$xwoba * xwoba_score +
+          LINEUP_WEIGHTS$second_half * second_half_score +
+          LINEUP_WEIGHTS$baserunning * baserunning_score
+      )
+    )
+
+  combined %>% arrange(team, desc(composite))
+}
+
+# ------------------------------------------------------------
+# Example usage:
+# lineup_scores <- build_lineup_scores(2026, "2026-07-01", "2026-10-01")
+# ------------------------------------------------------------
+```
+
+
+```{r}
+lineup_scores = build_lineup_scores(2026, "2026-07-15", "2026-10-01")
+lineup_scores
+```
+
+
+```{r}
+ATL_lineup = lineup_scores %>% filter(team == "ATL")
+BOS_lineup = lineup_scores %>% filter(team == "BOS")
+CHC_lineup = lineup_scores %>% filter(team == "CHC")
+CHW_lineup = lineup_scores %>% filter(team == "CHW")
+CLE_lineup = lineup_scores %>% filter(team == "CLE")
+HOU_lineup = lineup_scores %>% filter(team == "HOU")
+LAD_lineup = lineup_scores %>% filter(team == "LAD")
+MIL_lineup = lineup_scores %>% filter(team == "MIL")
+NYY_lineup = lineup_scores %>% filter(team == "NYY")
+PHI_lineup = lineup_scores %>% filter(team == "PHI")
+SDP_lineup = lineup_scores %>% filter(team == "SDP")
+TBR_lineup = lineup_scores %>% filter(team == "TBR")
+TBR_lineup
+```
+
+```{r}
+# ============================================================
+# bullpen_score.R
+# Scores each team's expected bullpen (incl. starters used in relief)
+# using 1st-time-through-the-order (TTO1) stats for everyone.
+#
+# K-BB%          60%  - stuff + control, stabilizes fastest
+# HR/9           15%  - lower is better
+# wOBA-against   15%  - lower is better
+# 2nd half       10%  - same three stats (TTO1, 2nd half only), mixed
+#                       60/20/20 internally; no shrinkage
+#
+# Inputs:
+#   tto1_lookup.csv       - FanGraphs Splits Tool export, TTO1 split,
+#                           ALL pitchers (full pool = real league avg
+#                           for shrinkage)
+#   tto1_2h_lookup.csv    - same export, date range set to 2nd half
+#   expected_bullpen.csv - team, player_name (~7 per team, your picks)
+#
+# Season stats are shrunk toward league average by batters faced,
+# since reliever samples are thin. If a pitcher has no 2nd-half data,
+# the 2nd-half weight is dropped and the rest rescaled (same as lineup).
+# ============================================================
+
+library(dplyr)
+
+BULLPEN_WEIGHTS <- list(k_bb = 0.60, hr = 0.15, woba = 0.15, second_half = 0.10)
+WEIGHTS_2H_INNER <- list(k_bb = 0.60, hr = 0.20, woba = 0.20)
+
+normalize_name <- function(x) {
+  x <- iconv(x, to = "UTF-8", sub = "byte")
+  x <- tolower(trimws(x))
+  from <- "áàäâãåéèëêíìïîóòöôõøúùüûñçýÿ"
+  to   <- "aaaaaaeeeeiiiioooooouuuuncyy"
+  chartr(from, to, x)
+}
+
+TEAM_ALIASES <- c("TB" = "TBR", "SD" = "SDP", "CWS" = "CHW", "WSH" = "WSN",
+                  "KC" = "KCR", "SF" = "SFG", "AZ" = "ARI")
+normalize_team <- function(x) {
+  x <- toupper(trimws(x))
+  ifelse(x %in% names(TEAM_ALIASES), TEAM_ALIASES[x], x)
+}
+
+# FanGraphs exports can store percentages as text ("25.3 %")
+to_num <- function(x) as.numeric(gsub("[% ,]", "", as.character(x)))
+
+normalize <- function(x, lower_is_better = FALSE) {
+  r <- range(x, na.rm = TRUE)
+  s <- (x - r[1]) / (r[2] - r[1])
+  if (lower_is_better) 1 - s else s
+}
+
+shrink <- function(raw, n, league_avg, k) (n * raw + k * league_avg) / (n + k)
+
+# Exports can carry blank header cells -> NA/"" column names, which
+# break dplyr. Drop them (same fix as lineup_score.R).
+drop_unnamed_cols <- function(df) {
+  df[, !is.na(names(df)) & names(df) != "", drop = FALSE]
+}
+
+# ------------------------------------------------------------
+# 1. TTO1 stats for all pitchers, shrunk by BF
+#    Columns: player_name, team, IP, TBF, wOBA, HR/9, K-BB%
+# ------------------------------------------------------------
+get_tto1_stats <- function(path = "tto1_lookup.csv",
+                           k_kbb = 100, k_hr = 300, k_woba = 200) {
+  raw <- read.csv(path, stringsAsFactors = FALSE, check.names = FALSE) %>%
+    drop_unnamed_cols() %>%
+    transmute(
+      join_name = normalize_name(player_name),
+      bf        = to_num(TBF),
+      k_bb_raw  = to_num(`K-BB%`),
+      hr_raw    = to_num(`HR/9`),
+      woba_raw  = to_num(wOBA)
+    )
+
+  raw %>%
+    mutate(
+      k_bb = shrink(k_bb_raw, bf, mean(k_bb_raw, na.rm = TRUE), k_kbb),
+      hr   = shrink(hr_raw,   bf, mean(hr_raw,   na.rm = TRUE), k_hr),
+      woba = shrink(woba_raw, bf, mean(woba_raw, na.rm = TRUE), k_woba)
+    )
+}
+
+# ------------------------------------------------------------
+# 1b. 2nd-half TTO1 stats -- raw, no shrinkage
+# ------------------------------------------------------------
+get_tto1_2h_stats <- function(path = "tto1_2h_lookup.csv") {
+  read.csv(path, stringsAsFactors = FALSE, check.names = FALSE) %>%
+    drop_unnamed_cols() %>%
+    transmute(
+      join_name = normalize_name(player_name),
+      k_bb_2h   = to_num(`K-BB%`),
+      hr_2h     = to_num(`HR/9`),
+      woba_2h   = to_num(wOBA)
+    )
+}
+
+# ------------------------------------------------------------
+# 2. Per-pitcher scores for your confirmed bullpens
+# ------------------------------------------------------------
+build_bullpen_scores <- function(tto1_path = "tto1_lookup.csv",
+                                 tto1_2h_path = "tto1_2h_lookup.csv",
+                                 bullpen_path = "expected_bullpen.csv") {
+  pen  <- read.csv(bullpen_path, stringsAsFactors = FALSE) %>%
+    mutate(join_name = normalize_name(player_name),
+           team      = normalize_team(team))
+  tto1    <- get_tto1_stats(tto1_path)
+  tto1_2h <- get_tto1_2h_stats(tto1_2h_path)
+
+  pen %>%
+    left_join(tto1,    by = "join_name") %>%
+    left_join(tto1_2h, by = "join_name") %>%
+    mutate(
+      k_bb_score = normalize(k_bb),
+      hr_score   = normalize(hr,   lower_is_better = TRUE),
+      woba_score = normalize(woba, lower_is_better = TRUE),
+
+      second_half_score =
+        WEIGHTS_2H_INNER$k_bb * normalize(k_bb_2h) +
+        WEIGHTS_2H_INNER$hr   * normalize(hr_2h,   lower_is_better = TRUE) +
+        WEIGHTS_2H_INNER$woba * normalize(woba_2h, lower_is_better = TRUE),
+
+      season_part = BULLPEN_WEIGHTS$k_bb * k_bb_score +
+                    BULLPEN_WEIGHTS$hr   * hr_score +
+                    BULLPEN_WEIGHTS$woba * woba_score,
+
+      composite = ifelse(
+        is.na(second_half_score),
+        season_part / (1 - BULLPEN_WEIGHTS$second_half),
+        season_part + BULLPEN_WEIGHTS$second_half * second_half_score
+      )
+    ) %>%
+    select(-season_part) %>%
+    arrange(team, desc(composite))
+}
+
+# ------------------------------------------------------------
+# 3. Team bullpen score = average of that team's listed arms
+# ------------------------------------------------------------
+get_team_bullpen_scores <- function(scores_df) {
+  scores_df %>%
+    group_by(team) %>%
+    summarise(bullpen_score = mean(composite, na.rm = TRUE),
+              n_arms = sum(!is.na(composite)), .groups = "drop") %>%
+    arrange(desc(bullpen_score))
+}
+
+# pen <- build_bullpen_scores()
+# pen %>% filter(team == "ATL")
+# get_team_bullpen_scores(pen)
+```
+
+
+```{r}
+bullpen_scores = build_bullpen_scores()
+bullpen_scores
+```
+
+```{r}
+ATL_bullpen = bullpen_scores %>% filter(team == "ATL")
+BOS_bullpen = bullpen_scores %>% filter(team == "BOS")
+CHC_bullpen = bullpen_scores %>% filter(team == "CHC")
+CHW_bullpen = bullpen_scores %>% filter(team == "CHW")
+CLE_bullpen = bullpen_scores %>% filter(team == "CLE")
+HOU_bullpen = bullpen_scores %>% filter(team == "HOU")
+LAD_bullpen = bullpen_scores %>% filter(team == "LAD")
+MIL_bullpen = bullpen_scores %>% filter(team == "MIL")
+NYY_bullpen = bullpen_scores %>% filter(team == "NYY")
+PHI_bullpen = bullpen_scores %>% filter(team == "PHI")
+SDP_bullpen = bullpen_scores %>% filter(team == "SDP")
+TBR_bullpen = bullpen_scores %>% filter(team == "TBR")
+TBR_bullpen
+```
+
+
+
+```{r}
+# ============================================================
+# team_composites.R
+# Rolls each module's per-player scores up into ONE score per team
+# per section: rotation, lineup, defense, bullpen.
+#
+# Rotation: top 3 starters x2, 4th x1        (full = /7) -- from your picked rotations
+# Lineup:   top 7 hitters  x1.5, rest x1     (full 11 = /14.5)
+# Bullpen:  top 4 arms     x2, rest x1       (full 7 = /11)
+# Defense:  team composite as-is
+#
+# "Top" = highest composite within the team. Divides by the sum of
+# weights actually used, so a player with missing data doesn't count
+# as a zero.
+#
+# Takes the ALREADY-BUILT data frames as inputs -- build each module
+# first, then call this. (Don't re-source all four scripts and then
+# rebuild: they each define their own WEIGHTS/normalize(), so the
+# last one sourced overwrites the others.)
+# ============================================================
+
+library(dplyr)
+
+TEAM_ALIASES <- c("TB" = "TBR", "SD" = "SDP", "CWS" = "CHW", "WSH" = "WSN",
+                  "KC" = "KCR", "SF" = "SFG", "AZ" = "ARI")
+normalize_team <- function(x) {
+  x <- toupper(trimws(x))
+  ifelse(x %in% names(TEAM_ALIASES), TEAM_ALIASES[x], x)
+}
+
+# Weighted average of one team's scores: sort high->low, first
+# `top_n` get `top_w`, everyone else gets 1.
+weighted_top <- function(scores, top_n, top_w) {
+  s <- sort(scores, decreasing = TRUE, na.last = TRUE)
+  w <- ifelse(seq_along(s) <= top_n, top_w, 1)
+  ok <- !is.na(s)
+  sum(w[ok] * s[ok]) / sum(w[ok])
+}
+
+# ------------------------------------------------------------
+# Rotation: takes your already-picked rotations (the get_team_rotation()
+# results with only_players), stacked into one data frame:
+#   rotations <- bind_rows(PHI_rotation, LAD_rotation, ...)
+# ------------------------------------------------------------
+team_rotation_scores <- function(rotations, top_n = 3, top_w = 2) {
+  rotations %>%
+    mutate(team = normalize_team(team)) %>%
+    group_by(team) %>%
+    summarise(rotation = weighted_top(composite, top_n, top_w), .groups = "drop")
+}
+
+# ------------------------------------------------------------
+# Lineup / bullpen: same idea, different weights
+# ------------------------------------------------------------
+team_lineup_scores <- function(lineup_scores, top_n = 7, top_w = 1.5) {
+  lineup_scores %>%
+    mutate(team = normalize_team(team)) %>%
+    group_by(team) %>%
+    summarise(lineup = weighted_top(composite, top_n, top_w), .groups = "drop")
+}
+
+team_bullpen_scores <- function(bullpen_scores, top_n = 4, top_w = 2) {
+  bullpen_scores %>%
+    mutate(team = normalize_team(team)) %>%
+    group_by(team) %>%
+    summarise(bullpen = weighted_top(composite, top_n, top_w), .groups = "drop")
+}
+
+team_defense_scores <- function(defense_scores) {
+  defense_scores %>%
+    transmute(team = normalize_team(team), defense = composite)
+}
+
+# ------------------------------------------------------------
+# All four side by side, one row per playoff team
+# ------------------------------------------------------------
+build_team_composites <- function(rotations = pitching_scores, lineup = lineup_scores,
+                                  defense = defense_scores, bullpen = bullpen_scores) {
+  teams <- unique(normalize_team(lineup_scores$team))
+
+  team_lineup_scores(lineup_scores) %>%
+    full_join(team_rotation_scores(rotations),             by = "team") %>%
+    full_join(team_defense_scores(defense_scores),         by = "team") %>%
+    full_join(team_bullpen_scores(bullpen_scores),         by = "team") %>%
+    filter(team %in% teams) %>%
+    select(team, rotation, lineup, defense, bullpen)
+}
+
+# Example:
+# rotations <- bind_rows(PHI_rotation, LAD_rotation, ...)  # your picked rotations
+# lineup    <- build_lineup_scores(2026, "2026-07-01", "2026-10-01")
+# defense   <- build_team_defense_scores()
+# pen       <- build_bullpen_scores()
+# teams_df  <- build_team_composites(rotations, lineup, defense, pen)
+```
+
+```{r}
+team_scores = build_team_composites()
+team_scores
+```
+
+```{r}
+# ============================================================
+# predict_series.R
+# Fills the Predictions column of the submission template:
+# P(BetterSeed wins a best-of-SeriesLength series).
+#
+# Steps:
+#  1. Team section scores (rotation, lineup, defense, bullpen) from
+#     team_composites.R are z-scored across the playoff field, so each
+#     section's weight means what it says regardless of its raw spread.
+#  2. Per series length, weight the sections into one team rating
+#     (ROUND_WEIGHTS), then re-standardize.
+#  3. Bradley-Terry single game: P(win) = logistic(GAME_SCALE * gap +/- HFA)
+#  4. Walk through the actual home/away schedule of the series
+#     (3: all at better seed; 5: 2-2-1; 7: 2-3-2) to get P(series).
+#
+# Brier score rewards calibration: MLB series are close to coin flips,
+# so GAME_SCALE is deliberately modest.
+# ============================================================
+
+library(dplyr)
+
+# ---- Section weights per series length (EDIT THESE) --------
+# Same split for every series length for now -- change a row to
+# weight a round differently.
+ROUND_WEIGHTS <- list(
+  "3" = c(rotation = 0.30, lineup = 0.40, defense = 0.10, bullpen = 0.20),
+  "5" = c(rotation = 0.30, lineup = 0.40, defense = 0.10, bullpen = 0.20),
+  "7" = c(rotation = 0.30, lineup = 0.40, defense = 0.10, bullpen = 0.20)
+)
+
+# ---- Model scale -------------------------------------------
+# GAME_SCALE: logit change per 1 SD of team rating. At 0.15:
+#   gap (SD)   best-of-3   best-of-5   best-of-7   (incl. home field)
+#     0          0.55        0.51        0.51
+#     1          0.60        0.58        0.59
+#     2          0.65        0.65        0.67
+#     3          0.70        0.71        0.74
+# i.e. the best-vs-worst playoff matchup tops out around 70-75%,
+# which is about as confident as MLB series history supports.
+GAME_SCALE <- 0.15
+# HFA_LOGIT: home-field edge; 0.12 ~= home team wins 53% (postseason-ish)
+HFA_LOGIT  <- 0.12
+
+# 1 = game at the better seed's park
+HOME_PATTERNS <- list(
+  "3" = c(1, 1, 1),
+  "5" = c(1, 1, 0, 0, 1),
+  "7" = c(1, 1, 0, 0, 0, 1, 1)
+)
+
+# MLB official team IDs -> the team codes used in the other CSVs
+MLB_ID_TO_CODE <- c(
+  "108" = "LAA", "109" = "ARI", "110" = "BAL", "111" = "BOS", "112" = "CHC",
+  "113" = "CIN", "114" = "CLE", "115" = "COL", "116" = "DET", "117" = "HOU",
+  "118" = "KCR", "119" = "LAD", "120" = "WSN", "121" = "NYM", "133" = "ATH",
+  "134" = "PIT", "135" = "SDP", "136" = "SEA", "137" = "SFG", "138" = "STL",
+  "139" = "TBR", "140" = "TEX", "141" = "TOR", "142" = "MIN", "143" = "PHI",
+  "144" = "ATL", "145" = "CHW", "146" = "MIA", "147" = "NYY", "158" = "MIL",
+  "35"  = "SDP"   # template's ID for the Padres (typo for 135) -- kept as-is in output
+)
+
+zscore <- function(x) (x - mean(x, na.rm = TRUE)) / sd(x, na.rm = TRUE)
+
+# ------------------------------------------------------------
+# Team rating for a given series length
+# ------------------------------------------------------------
+team_ratings <- function(teams_df, series_length) {
+  w <- ROUND_WEIGHTS[[as.character(series_length)]]
+  z <- teams_df %>%
+    mutate(across(c(rotation, lineup, defense, bullpen), zscore))
+
+  z %>%
+    mutate(rating = w["rotation"] * rotation + w["lineup"]  * lineup +
+                    w["defense"]  * defense  + w["bullpen"] * bullpen,
+           rating = zscore(rating)) %>%
+    select(team, rating)
+}
+
+# ------------------------------------------------------------
+# P(better seed wins series), following the real home/away order
+# ------------------------------------------------------------
+series_win_prob <- function(r_better, r_worse, series_length) {
+  gap    <- GAME_SCALE * (r_better - r_worse)
+  p_home <- plogis(gap + HFA_LOGIT)
+  p_away <- plogis(gap - HFA_LOGIT)
+  need    <- (series_length + 1) / 2
+  pattern <- HOME_PATTERNS[[as.character(series_length)]]
+
+  f <- function(i, j) {
+    if (i == need) return(1)
+    if (j == need) return(0)
+    p <- if (pattern[i + j + 1] == 1) p_home else p_away
+    p * f(i + 1, j) + (1 - p) * f(i, j + 1)
+  }
+  f(0, 0)
+}
+
+# ------------------------------------------------------------
+# Fill the template and save
+# ------------------------------------------------------------
+fill_predictions <- function(teams_df, template_path, out_path = "predictions.csv") {
+  tmpl <- read.csv(template_path, stringsAsFactors = FALSE, check.names = FALSE)
+
+  # Excel-saved CSVs often carry blank trailing rows -- drop them
+  tmpl <- tmpl[!is.na(tmpl$BetterSeedID) & !is.na(tmpl$WorseSeedID) &
+                 !is.na(tmpl$SeriesLength), ]
+
+  ids <- unique(as.character(c(tmpl$BetterSeedID, tmpl$WorseSeedID)))
+  unknown_ids <- setdiff(ids, names(MLB_ID_TO_CODE))
+  if (length(unknown_ids) > 0) {
+    stop("Unrecognized team IDs in template: ", paste(unknown_ids, collapse = ", "))
+  }
+
+  tmpl$better_code <- unname(MLB_ID_TO_CODE[as.character(tmpl$BetterSeedID)])
+  tmpl$worse_code  <- unname(MLB_ID_TO_CODE[as.character(tmpl$WorseSeedID)])
+
+  missing <- setdiff(unique(c(tmpl$better_code, tmpl$worse_code)), teams_df$team)
+  if (length(missing) > 0) {
+    stop("No team scores for: ", paste(missing, collapse = ", "),
+         " -- check team codes in teams_df.")
+  }
+
+  ratings <- lapply(c(3, 5, 7), function(L) team_ratings(teams_df, L))
+  names(ratings) <- c("3", "5", "7")
+  get_r <- function(code, L) {
+    r <- ratings[[as.character(L)]]
+    r$rating[r$team == code]
+  }
+
+  tmpl$Predictions <- mapply(function(b, w, L) {
+    series_win_prob(get_r(b, L), get_r(w, L), L)
+  }, tmpl$better_code, tmpl$worse_code, tmpl$SeriesLength)
+
+  tmpl <- tmpl %>% select(-better_code, -worse_code)
+  write.csv(tmpl, out_path, row.names = FALSE)
+  message("Wrote ", nrow(tmpl), " rows to ", out_path,
+          " | Predictions range: ",
+          round(min(tmpl$Predictions), 3), " - ", round(max(tmpl$Predictions), 3))
+  invisible(tmpl)
+}
+
+# Example:
+# teams_df <- build_team_composites(rotations, lineup, defense, pen)
+# preds    <- fill_predictions(teams_df, "submission_template.csv")
+```
+
+
+
