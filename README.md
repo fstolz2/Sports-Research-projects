@@ -1,0 +1,1 @@
+This was a Claude cooperative coding project where I constructed an MLB prediction for the playoffs this year. Tragically I didn't get to retrofit it much to add appropriate weight but in the future I will hopefully go back and add that part.
